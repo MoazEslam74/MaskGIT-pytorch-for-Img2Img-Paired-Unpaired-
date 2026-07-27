@@ -1,2 +1,9 @@
 # ignore upload any image 
 *.jpg
+
+# Ignore the pth files
+*.pth
+
+#Ignore checkpoints
+
+*.cpython-310.pyc

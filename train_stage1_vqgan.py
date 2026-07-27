@@ -46,6 +46,34 @@ def extract_targets(source_dir, dest_dir, direction="AtoB", exts=(".png", ".jpg"
     print(f"Extracted {len(files)} target images from {source_dir} -> {dest_dir}")
 
 
+def patch_hardcoded_dataset_path(training_script_path):
+    """
+    dome272/MaskGIT-pytorch's training_vqgan.py has a leftover debug line
+    that unconditionally overwrites args.dataset_path AFTER argparse runs:
+
+        args.dataset_path = r"C:\\Users\\dome\\datasets\\flowers"
+
+    This silently discards whatever --dataset-path you pass on the CLI.
+    Comment that line out (idempotent — safe to call every run).
+    """
+    with open(training_script_path, "r") as f:
+        lines = f.readlines()
+
+    changed = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("args.dataset_path =") and not stripped.startswith("#"):
+            lines[i] = "# " + line
+            changed = True
+            print(f"Patched hardcoded dataset_path override in {training_script_path} (line {i+1})")
+
+    if changed:
+        with open(training_script_path, "w") as f:
+            f.writelines(lines)
+    else:
+        print("No hardcoded dataset_path override found (already patched, or script changed).")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-dir", type=str, default="./data/train",
@@ -77,15 +105,18 @@ def main():
     else:
         print(f"Skipping extraction, using existing folder: {args.targets_dir}")
 
-    training_script = os.path.join(args.maskgit_repo, "training_vqgan.py")
+    training_script_name = "training_vqgan.py"
+    training_script = os.path.join(args.maskgit_repo, training_script_name)
     if not os.path.isfile(training_script):
         raise FileNotFoundError(
             f"Could not find training_vqgan.py at {training_script}. "
             "Check --maskgit-repo points at your cloned repo."
         )
 
+    patch_hardcoded_dataset_path(training_script)
+
     cmd = [
-        sys.executable, training_script,
+        sys.executable, "-u", training_script_name,   # -u = unbuffered stdout, so tqdm/prints show live
         "--dataset-path", os.path.abspath(args.targets_dir),
         "--image-size", str(args.image_size),
         "--batch-size", str(args.batch_size),
@@ -97,7 +128,11 @@ def main():
 
     print("Launching Stage 1 VQGAN training:")
     print(" ", " ".join(cmd))
-    subprocess.run(cmd, cwd=args.maskgit_repo, check=True)
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"   # belt-and-suspenders: forces live tqdm/print output
+
+    subprocess.run(cmd, cwd=args.maskgit_repo, check=True, env=env)
 
 
 if __name__ == "__main__":
