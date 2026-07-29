@@ -3,6 +3,7 @@
 
 # Ignore the pth files
 *.pth
+*.pt
 
 #Ignore checkpoints
 
