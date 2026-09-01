@@ -8,3 +8,4 @@
 #Ignore checkpoints
 
 *.cpython-310.pyc
+*.DESKTOP-SPKUG80.*
