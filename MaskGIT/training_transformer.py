@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 import argparse
@@ -6,10 +8,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import utils as vutils
-from transformer import VQGANTransformer
-from utils import load_data, plot_images
-from lr_schedule import WarmupLinearLRSchedule
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from paired_dataset import PairedABDataset
+from conditional_vqgan_transformer import ConditionalVQGANTransformer as VQGANTransformer
+from utils import plot_images
+from lr_schedule import WarmupLinearLRSchedule
 
 
 class TrainTransformer:
@@ -36,31 +45,42 @@ class TrainTransformer:
         self.train(args)
 
     def train(self, args):
-        train_dataset = load_data(args)
-        len_train_dataset = len(train_dataset)
+        train_dataset = PairedABDataset(args.dataset_path, image_size=args.image_size, direction="AtoB")
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+        len_train_dataset = len(train_loader)
         step = args.start_from_epoch * len_train_dataset
-        for epoch in range(args.start_from_epoch+1, args.epochs+1):
+        for epoch in range(args.start_from_epoch + 1, args.epochs + 1):
             print(f"Epoch {epoch}:")
-            with tqdm(range(len(train_dataset))) as pbar:
+            with tqdm(range(len(train_loader))) as pbar:
                 self.lr_schedule.step()
-                for i, imgs in zip(pbar, train_dataset):
-                    imgs = imgs.to(device=args.device)
-                    logits, target = self.model(imgs)
+                for i, batch in zip(pbar, train_loader):
+                    sketch = batch["sketch"].to(device=args.device)
+                    target_img = batch["target"].to(device=args.device)
+
+                    logits, target = self.model(target_img, sketch)
                     loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
+
                     if step % args.accum_grad == 0:
                         self.optim.step()
                         self.optim.zero_grad()
                     step += 1
+
                     pbar.set_postfix(Transformer_Loss=np.round(loss.cpu().detach().numpy().item(), 4))
                     pbar.update(0)
-                    self.logger.add_scalar("Cross Entropy Loss", np.round(loss.cpu().detach().numpy().item(), 4), (epoch * len_train_dataset) + i)
+                    self.logger.add_scalar(
+                        "Cross Entropy Loss",
+                        np.round(loss.cpu().detach().numpy().item(), 4),
+                        (epoch * len_train_dataset) + i,
+                    )
+
             try:
-                log, sampled_imgs = self.model.log_images(imgs[0:1])
+                log, sampled_imgs = self.model.log_images(target_img[:1], sketch[:1])
                 vutils.save_image(sampled_imgs.add(1).mul(0.5), os.path.join("results", f"{epoch}.jpg"), nrow=4)
                 plot_images(log)
-            except:
+            except Exception:
                 pass
+
             if epoch % args.ckpt_interval == 0:
                 torch.save(self.model.state_dict(), os.path.join("checkpoints", f"transformer_epoch_{epoch}.pt"))
             torch.save(self.model.state_dict(), os.path.join("checkpoints", "transformer_current.pt"))
@@ -90,7 +110,12 @@ class TrainTransformer:
         #     {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": 4.5e-2},
         #     {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
         # ]
-        optimizer = torch.optim.Adam(self.model.transformer.parameters(), lr=1e-4, betas=(0.9, 0.96), weight_decay=4.5e-2)
+        optimizer = torch.optim.Adam(
+            list(self.model.transformer.parameters()) + list(self.model.sketch_encoder.parameters()),
+            lr=1e-4,
+            betas=(0.9, 0.96),
+            weight_decay=4.5e-2,
+        )
         return optimizer
 
 
@@ -122,17 +147,17 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args.run_name = "<name>"
     args.dataset_path = r"C:\Users\dome\datasets\landscape"
-    args.checkpoint_path = r".\checkpoints"
+    args.checkpoint_path = r"./checkpoints/vqgan_epoch_18.pt"
     args.n_layers = 24
     args.dim = 768
     args.hidden_dim = 3072
     args.batch_size = 4
     args.accum_grad = 25
     args.epochs = 1000
-
+    args.latent_dim = 256
     args.start_from_epoch = 0
 
-    args.num_codebook_vectors = 1024
+    args.num_codebook_vectors = 8192
     args.num_image_tokens = 256
 
 
