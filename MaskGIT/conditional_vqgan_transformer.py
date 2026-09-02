@@ -237,4 +237,9 @@ class ConditionalVQGANTransformer(nn.Module):
         log["input"] = x
         log["rec"] = x_rec
         log["new_sample"] = x_new
+
+        # DIAGNOSTIC -- remove once the range issue is confirmed/fixed
+        for name, t in [("sketch", sketch), ("target", x), ("reconstruction", x_rec), ("generated", x_new)]:
+            print(f"  [range check] {name}: min={t.min().item():.4f}  max={t.max().item():.4f}  mean={t.mean().item():.4f}")
+
         return log, torch.cat((sketch, x, x_rec, x_new), dim=0)

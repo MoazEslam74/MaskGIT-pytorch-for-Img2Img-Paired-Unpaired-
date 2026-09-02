@@ -1,5 +1,6 @@
 # ignore upload any image 
 *.jpg
+*.png
 
 # Ignore the pth files
 *.pth
